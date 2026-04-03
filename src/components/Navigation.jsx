@@ -18,7 +18,7 @@ const Navigation = () => {
     <nav className="flex items-center justify-between p-6 border-b border-surface/50 bg-background/50 backdrop-blur-sm sticky top-0 z-50">
       <Link to="/" className="flex items-center gap-2 text-xl font-bold tracking-tight">
         <img src="/favicon.png" alt="Logo" className="w-7 h-7" />
-        <span>Talk2Anyone</span>
+        <span>Talk2Anyone.ai</span>
       </Link>
       <div className="flex items-center gap-6 font-medium">
         <Link to="/learn" className={`transition-colors ${isActive('/learn')}`}>Learn ASL</Link>

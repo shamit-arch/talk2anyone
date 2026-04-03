@@ -13,6 +13,11 @@ const AITranslationStudio = () => {
   const [testScore, setTestScore] = useState(0);
   const [displayTarget, setDisplayTarget] = useState('A');
   const [displayProgress, setDisplayProgress] = useState(0);
+  const [highScore, setHighScore] = useState(0);
+
+  useEffect(() => {
+    setHighScore(parseInt(localStorage.getItem('asl_highscore') || '0', 10));
+  }, []);
 
   const webcamRef = useRef(null);
   const requestRef = useRef();
@@ -61,85 +66,112 @@ const AITranslationStudio = () => {
     loadModel();
   }, []);
 
-  const detect = async () => {
-    if (activeTab === 'text-to-sign') {
-      requestRef.current = requestAnimationFrame(detect);
-      return;
-    }
-
-    if (model && webcamRef.current && webcamRef.current.video.readyState === 4) {
-      const video = webcamRef.current.video;
-      try {
-        const videoWidth = video.videoWidth;
-        const videoHeight = video.videoHeight;
-        const cropSize = Math.min(videoWidth, videoHeight);
-        const startY = Math.floor((videoHeight - cropSize) / 2);
-        const startX = Math.floor((videoWidth - cropSize) / 2);
-
-        const tensor = tf.tidy(() => {
-          let img = tf.browser.fromPixels(video);
-          const croppedImg = tf.slice(img, [startY, startX, 0], [cropSize, cropSize, 3]);
-          return tf.image.resizeNearestNeighbor(croppedImg, [256, 256])
-            .toFloat().div(tf.scalar(255.0)).expandDims(0);
-        });
-
-        const predictionTensor = await model.predict(tensor);
-        const scores = predictionTensor.dataSync();
-
-        let maxScore = -1;
-        let maxIndex = 0;
-        for (let i = 0; i < scores.length; i++) {
-          if (scores[i] > maxScore) { maxScore = scores[i]; maxIndex = i; }
-        }
-
-        if (scores.length >= 26) {
-          const predictedLetter = String.fromCharCode(65 + Math.min(maxIndex, 25));
-
-          if (activeTab === 'ai-skill-test') {
-            if (maxScore > 0.1 && predictedLetter === testStateRef.current.target) {
-              testStateRef.current.progress += 1;
-            } else {
-              testStateRef.current.progress = 0;
-            }
-
-            if (testStateRef.current.progress > 10) {
-              testStateRef.current.score += 10;
-              testStateRef.current.target = getRandomLetter();
-              testStateRef.current.progress = 0;
-              setTestScore(testStateRef.current.score);
-              setDisplayTarget(testStateRef.current.target);
-              incrementStreak(); // Auto update streak
-            }
-            setDisplayProgress(testStateRef.current.progress);
-          } else {
-            // Standard Translation Mode
-            if (maxScore > 0.1) {
-              if (lastPredictionRef.current.letter === predictedLetter) lastPredictionRef.current.count += 1;
-              else { lastPredictionRef.current.letter = predictedLetter; lastPredictionRef.current.count = 1; }
-
-              if (lastPredictionRef.current.count > 10) setPrediction(`CONFIRMED: ${predictedLetter}`);
-              else setPrediction(`Holding ${predictedLetter}... (${lastPredictionRef.current.count}/10)`);
-            } else {
-              setPrediction(`Waiting for distinct gesture...`);
-              lastPredictionRef.current.count = 0;
-            }
-          }
-        } else {
-          setPrediction(`Class: ${maxIndex}`);
-        }
-        tf.dispose([tensor, predictionTensor]);
-      } catch (e) { }
-    }
-    setTimeout(() => { requestRef.current = requestAnimationFrame(detect); }, 150);
-  };
-
   useEffect(() => {
-    if (model) { requestRef.current = requestAnimationFrame(detect); }
-    return () => { if (requestRef.current) cancelAnimationFrame(requestRef.current); };
+    let isRunning = true;
+    let timeoutId = null;
+
+    const runDetection = async () => {
+      if (!isRunning || activeTab === 'text-to-sign') return;
+
+      if (model && webcamRef.current && webcamRef.current.video.readyState === 4) {
+        const video = webcamRef.current.video;
+        let tensor = null;
+        let predictionTensor = null;
+
+        try {
+          const videoWidth = video.videoWidth;
+          const videoHeight = video.videoHeight;
+          const cropSize = Math.min(videoWidth, videoHeight);
+          const startY = Math.floor((videoHeight - cropSize) / 2);
+          const startX = Math.floor((videoWidth - cropSize) / 2);
+
+          tensor = tf.tidy(() => {
+            let img = tf.browser.fromPixels(video);
+            const croppedImg = tf.slice(img, [startY, startX, 0], [cropSize, cropSize, 3]);
+            return tf.image.resizeNearestNeighbor(croppedImg, [256, 256])
+              .toFloat().div(tf.scalar(255.0)).expandDims(0);
+          });
+
+          predictionTensor = await model.predict(tensor);
+          const scores = await predictionTensor.data();
+
+          if (!isRunning) return;
+
+          let maxScore = -1;
+          let maxIndex = 0;
+          for (let i = 0; i < scores.length; i++) {
+            if (scores[i] > maxScore) { maxScore = scores[i]; maxIndex = i; }
+          }
+
+          if (scores.length >= 26) {
+            const predictedLetter = String.fromCharCode(65 + Math.min(maxIndex, 25));
+
+            if (activeTab === 'ai-skill-test') {
+              if (maxScore > 0.1 && predictedLetter === testStateRef.current.target) {
+                testStateRef.current.progress += 1;
+              } else {
+                testStateRef.current.progress = 0;
+              }
+
+              if (testStateRef.current.progress > 10) {
+                testStateRef.current.score += 10;
+                
+                const currentHighScore = parseInt(localStorage.getItem('asl_highscore') || '0', 10);
+                if (testStateRef.current.score > currentHighScore) {
+                  localStorage.setItem('asl_highscore', testStateRef.current.score.toString());
+                  setHighScore(testStateRef.current.score);
+                }
+
+                testStateRef.current.target = getRandomLetter();
+                testStateRef.current.progress = 0;
+                setTestScore(testStateRef.current.score);
+                setDisplayTarget(testStateRef.current.target);
+                incrementStreak(); 
+              }
+              setDisplayProgress(testStateRef.current.progress);
+            } else {
+              if (maxScore > 0.1) {
+                if (lastPredictionRef.current.letter === predictedLetter) lastPredictionRef.current.count += 1;
+                else { lastPredictionRef.current.letter = predictedLetter; lastPredictionRef.current.count = 1; }
+
+                if (lastPredictionRef.current.count > 10) setPrediction(`CONFIRMED: ${predictedLetter}`);
+                else setPrediction(`Holding ${predictedLetter}... (${lastPredictionRef.current.count}/10)`);
+              } else {
+                setPrediction(`Waiting for distinct gesture...`);
+                lastPredictionRef.current.count = 0;
+              }
+            }
+          } else {
+            setPrediction(`Class: ${maxIndex}`);
+          }
+        } catch (e) {
+          console.error("TF Prediction Error:", e);
+        } finally {
+          if (tensor) tensor.dispose();
+          if (predictionTensor) predictionTensor.dispose();
+        }
+      }
+
+      if (isRunning) {
+        timeoutId = setTimeout(() => {
+          if (isRunning) requestRef.current = requestAnimationFrame(runDetection);
+        }, 150);
+      }
+    };
+
+    if (model && activeTab !== 'text-to-sign') {
+      runDetection();
+    }
+
+    return () => {
+      isRunning = false;
+      if (timeoutId) clearTimeout(timeoutId);
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+    };
   }, [model, activeTab]);
 
   return (
-    <div className="max-w-7xl mx-auto space-y-12 animate-fade-in">
+    <div className="max-w-7xl mx-auto space-y-12">
       <div className="text-center space-y-4">
         <h1 className="text-4xl md:text-5xl font-bold">Talk2Anyone Studio</h1>
         <p className="text-grayText">Convert between Sign Language and Text instantly.</p>
@@ -248,8 +280,8 @@ const AITranslationStudio = () => {
               {textInput.toUpperCase().split('').map((char, index) => {
                 if (char >= 'A' && char <= 'Z') {
                   return (
-                    <div key={index} className="inline-block flex-shrink-0 w-24 h-24 bg-background rounded-lg border border-grayText/20 overflow-hidden">
-                      <img src={`/asl_handsigns/${char.toLowerCase()}.png`} alt={char} className="w-full h-full object-contain brightness-110" onError={(e) => { e.target.style.display = 'none' }} />
+                    <div key={index} className="inline-block flex-shrink-0 w-24 h-24 overflow-hidden bg-white rounded-md border border-grayText/20 flex items-center justify-center p-1">
+                      <img src={`/asl_handsigns/${char.toLowerCase()}.png`} alt={char} className="w-full h-full object-contain" onError={(e) => { e.target.style.display = 'none' }} />
                     </div>
                   );
                 } else if (char === ' ') {
@@ -263,9 +295,15 @@ const AITranslationStudio = () => {
 
           {activeTab === 'ai-skill-test' && (
             <div className="space-y-6">
-              <div className="glass-card p-6 border border-primary/20 bg-background/50 flex justify-between items-center">
-                <h4 className="font-bold text-grayText">Current Score</h4>
-                <span className="text-3xl font-bold text-primary">{testScore}</span>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="glass-card p-6 border border-primary/20 bg-background/50 flex flex-col items-center">
+                  <h4 className="font-bold text-grayText text-sm uppercase tracking-wider mb-2">Score</h4>
+                  <span className="text-3xl font-bold text-primary">{testScore}</span>
+                </div>
+                <div className="glass-card p-6 border border-yellow-500/20 bg-background/50 flex flex-col items-center">
+                  <h4 className="font-bold text-grayText text-sm uppercase tracking-wider mb-2">High Score</h4>
+                  <span className="text-3xl font-bold text-yellow-500">{highScore}</span>
+                </div>
               </div>
 
               <div className="flex flex-col items-center justify-center space-y-6 pt-4">
